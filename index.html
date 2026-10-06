@@ -1,0 +1,844 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0d10" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="e-NV200" />
+  <title>Nissan e-NV200 Live Dashboard</title>
+
+  <!-- Inlined PWA Manifest & App Icons -->
+  <script>
+    (function() {
+      const svgIcon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="36" fill="#0b0d10"/><rect x="24" y="56" width="128" height="72" rx="10" fill="none" stroke="#3ddc84" stroke-width="8"/><rect x="152" y="76" width="16" height="32" rx="4" fill="#3ddc84"/><polygon points="88,68 60,100 88,100 72,128 116,92 88,92 104,68" fill="#3ddc84"/></svg>';
+      const iconUrl = "data:image/svg+xml," + encodeURIComponent(svgIcon);
+      const manifest = {
+        name: "Nissan e-NV200 Dashboard",
+        short_name: "e-NV200",
+        description: "Real-time OVMS HUD Dashboard for Nissan e-NV200 40kWh",
+        start_url: "./eNV200_dashboard.html",
+        display: "standalone",
+        orientation: "any",
+        background_color: "#0b0d10",
+        theme_color: "#0b0d10",
+        icons: [
+          { src: iconUrl, sizes: "192x192", type: "image/svg+xml" },
+          { src: iconUrl, sizes: "512x512", type: "image/svg+xml" }
+        ]
+      };
+      const blob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
+      const manifestUrl = URL.createObjectURL(blob);
+      const link = document.createElement('link');
+      link.rel = 'manifest';
+      link.href = manifestUrl;
+      document.head.appendChild(link);
+
+      const appleIcon = document.createElement('link');
+      appleIcon.rel = 'apple-touch-icon';
+      appleIcon.href = iconUrl;
+      document.head.appendChild(appleIcon);
+    })();
+  </script>
+
+  <!-- Inlined Service Worker for 100% Offline PWA Boot -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      const swCode = `
+        const CACHE = "env200-pwa-v3";
+        self.addEventListener("install", e => {
+          e.waitUntil(caches.open(CACHE).then(c => c.addAll(["./eNV200_dashboard.html", "./"])));
+          self.skipWaiting();
+        });
+        self.addEventListener("activate", e => {
+          e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))));
+          self.clients.claim();
+        });
+        self.addEventListener("fetch", e => {
+          if (e.request.url.startsWith("ws") || e.request.url.startsWith("wss") || e.request.url.includes("/api/")) return;
+          e.respondWith(caches.match(e.request).then(r => r || fetch(e.request).then(resp => {
+            const copy = resp.clone();
+            caches.open(CACHE).then(c => c.put(e.request, copy));
+            return resp;
+          })));
+        });
+      `;
+      const swBlob = new Blob([swCode], { type: 'application/javascript' });
+      navigator.serviceWorker.register(URL.createObjectURL(swBlob), { scope: './' }).catch(() => {});
+    }
+  </script>
+
+  <style>
+    :root {
+      --bg: #0b0d10;
+      --surface: #14171b;
+      --surface-alt: #1a1e23;
+      --line: #262b32;
+      --line-strong: #3a4048;
+      --text: #e8ecef;
+      --text-dim: #8a949e;
+      --text-faint: #5a6069;
+      --regen: #3ddc84;
+      --drive: #ffd23c;
+      --warn: #ff5252;
+      --cool: #7aa8d6;
+      --accent: #3ddc84;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+    html, body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+      touch-action: manipulation;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      padding: calc(env(safe-area-inset-top) + 8px) 14px calc(env(safe-area-inset-bottom) + 8px) 14px;
+      gap: 12px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px 14px;
+      position: relative;
+    }
+    .row { display: flex; align-items: center; justify-content: space-between; }
+    .badge {
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .badge.local { background: var(--regen); color: #000; }
+    .badge.turboserv { background: var(--cool); color: #000; }
+    .badge.offline { background: var(--line-strong); color: var(--text-dim); }
+    .badge.chg { animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+    /* GAUGES (SPEED + POWER) */
+    .gauges-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .dial-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 145px;
+      position: relative;
+    }
+    .dial-label {
+      position: absolute;
+      top: 10px;
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--text-faint);
+      letter-spacing: 0.8px;
+    }
+    .dial-value {
+      font-size: 44px;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -1.5px;
+      margin-top: 16px;
+    }
+    .dial-unit {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-dim);
+      margin-top: 3px;
+    }
+
+    /* POWER BAR */
+    .power-bar-wrap {
+      width: 100%;
+      height: 8px;
+      background: var(--surface-alt);
+      border-radius: 4px;
+      position: relative;
+      margin-top: 10px;
+      overflow: hidden;
+    }
+    .power-center-line {
+      position: absolute;
+      left: 35%;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--line-strong);
+      z-index: 2;
+    }
+    .power-fill-regen {
+      position: absolute;
+      right: 65%;
+      top: 0;
+      bottom: 0;
+      background: var(--regen);
+      border-radius: 4px 0 0 4px;
+      transition: width 0.08s linear;
+    }
+    .power-fill-drive {
+      position: absolute;
+      left: 35%;
+      top: 0;
+      bottom: 0;
+      background: var(--drive);
+      border-radius: 0 4px 4px 0;
+      transition: width 0.08s linear;
+    }
+
+    /* BATTERY & SOC */
+    .soc-bar {
+      width: 100%;
+      height: 12px;
+      background: var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 8px 0;
+    }
+    .soc-fill {
+      height: 100%;
+      background: var(--regen);
+      border-radius: 6px;
+      transition: width 0.3s ease, background 0.3s ease;
+    }
+
+    /* STATS & TILES */
+    .stats-grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+    }
+    .stats-grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .stat-box {
+      background: var(--surface-alt);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 6px;
+      text-align: center;
+    }
+    .stat-label { font-size: 9px; font-weight: 700; color: var(--text-faint); margin-bottom: 2px; }
+    .stat-val { font-size: 15px; font-weight: 700; color: var(--text); }
+    .stat-unit { font-size: 9px; font-weight: 600; color: var(--text-dim); }
+
+    /* TPMS */
+    .tpms-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .tpms-box {
+      background: var(--surface-alt);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* UNLOCK MODAL */
+    .unlock-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(11, 13, 16, 0.95);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      z-index: 200;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .unlock-card {
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+      border-radius: 16px;
+      padding: 24px;
+      width: 100%;
+      max-width: 360px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .unlock-input {
+      background: var(--surface-alt);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 16px;
+      padding: 12px;
+      text-align: center;
+      outline: none;
+    }
+    .unlock-btn {
+      background: var(--regen);
+      color: #000;
+      font-weight: 800;
+      padding: 12px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-size: 15px;
+    }
+
+    /* LANDSCAPE ADAPTATION */
+    @media (orientation: landscape) and (min-height: 400px) {
+      body {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      .col-left { display: flex; flex-direction: column; gap: 12px; }
+      .col-right { display: flex; flex-direction: column; gap: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- UNLOCK MODAL (First run only if no URL hash) -->
+  <div class="unlock-overlay" id="unlock-modal">
+    <div class="unlock-card">
+      <div style="font-size:36px;">🔐</div>
+      <h3 style="font-size:18px; font-weight:800;">e-NV200 Dashboard</h3>
+      <p style="font-size:12px; color:var(--text-dim);">Enter your master passphrase to decrypt and unlock configuration.</p>
+      <input type="password" class="unlock-input" id="passphrase-input" placeholder="Passphrase" autofocus />
+      <button class="unlock-btn" onclick="submitPassphrase()">Unlock Dashboard</button>
+      <div id="unlock-err" style="color:var(--warn); font-size:11px; display:none;">Incorrect passphrase</div>
+    </div>
+  </div>
+
+  <!-- LEFT COLUMN / TOP -->
+  <div class="col-left" style="display:flex; flex-direction:column; gap:12px;">
+    <!-- HEADER -->
+    <div class="card row">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-size:20px;">🚐</span>
+        <div>
+          <div style="font-size:15px; font-weight:800; letter-spacing:0.5px;" id="disp-vehicle-id">e-NV200</div>
+          <div style="font-size:10px; color:var(--text-dim);" id="car-state">Nissan e-NV200 40kWh</div>
+        </div>
+      </div>
+      <div id="conn-badge" class="badge offline">CONNECTING...</div>
+    </div>
+
+    <!-- SPEED & POWER GAUGES -->
+    <div class="gauges-row">
+      <div class="card dial-card">
+        <div class="dial-label">SPEED</div>
+        <div class="dial-value" id="val-speed">0</div>
+        <div class="dial-unit" id="speed-unit">KM/H</div>
+      </div>
+      <div class="card dial-card">
+        <div class="dial-label">POWER</div>
+        <div class="dial-value" id="val-power" style="color:var(--text);">0.0</div>
+        <div class="dial-unit" id="power-mode">KW · IDLE</div>
+        <div class="power-bar-wrap">
+          <div class="power-center-line"></div>
+          <div class="power-fill-regen" id="power-fill-regen" style="width:0%;"></div>
+          <div class="power-fill-drive" id="power-fill-drive" style="width:0%;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MAIN BATTERY & ESTIMATED RANGE -->
+    <div class="card">
+      <div class="row">
+        <div>
+          <span style="font-size:28px; font-weight:800;" id="val-soc">--%</span>
+          <span style="font-size:13px; color:var(--text-dim); margin-left:6px;" id="val-kwh-gids">-- kWh · -- gids</span>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:10px; font-weight:700; color:var(--text-faint);">EST RANGE (@14kWh)</div>
+          <div style="font-size:20px; font-weight:800; color:var(--cool);" id="val-range">-- km</div>
+        </div>
+      </div>
+      <div class="soc-bar">
+        <div class="soc-fill" id="soc-bar-fill" style="width:0%;"></div>
+      </div>
+      <div class="row" style="font-size:11px; color:var(--text-dim); margin-top:2px;">
+        <span>SOH: <b id="val-soh" style="color:var(--text);">--%</b></span>
+        <span>HV: <b id="val-voltage" style="color:var(--text);">--V</b></span>
+        <span>CHG LIMIT: <b style="color:var(--text);">80%</b></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT COLUMN / BOTTOM -->
+  <div class="col-right" style="display:flex; flex-direction:column; gap:12px;">
+    <!-- TRIP COMPUTER -->
+    <div class="card">
+      <div style="font-size:10px; font-weight:700; color:var(--text-faint); margin-bottom:8px; letter-spacing:0.8px;">TRIP METRICS</div>
+      <div class="stats-grid-4">
+        <div class="stat-box">
+          <div class="stat-label">CONSUMED</div>
+          <div class="stat-val" id="trip-consumed">0.00</div>
+          <div class="stat-unit">kWh</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">RECOVERED</div>
+          <div class="stat-val" id="trip-recovered" style="color:var(--regen);">0.00</div>
+          <div class="stat-unit">kWh</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">DISTANCE</div>
+          <div class="stat-val" id="trip-dist">0.0</div>
+          <div class="stat-unit">km</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">NET AVG</div>
+          <div class="stat-val" id="trip-efficiency">--</div>
+          <div class="stat-unit">kWh/100</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- THERMALS & CHILLER -->
+    <div class="card">
+      <div class="row" style="margin-bottom:6px;">
+        <div style="font-size:10px; font-weight:700; color:var(--text-faint); letter-spacing:0.8px;">BATTERY THERMALS</div>
+        <div style="font-size:11px; font-weight:700;" id="chiller-badge"></div>
+      </div>
+      <div class="stats-grid-3">
+        <div class="stat-box">
+          <div class="stat-label">AVG TEMP</div>
+          <div class="stat-val" id="val-bat-temp">--°</div>
+          <div class="stat-unit">Celsius</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">CELL SPREAD</div>
+          <div class="stat-val" id="val-temp-spread">--°</div>
+          <div class="stat-unit">Delta Max-Min</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">12V AUX</div>
+          <div class="stat-val" id="val-12v">--V</div>
+          <div class="stat-unit">Lead-Acid</div>
+        </div>
+      </div>
+
+      <div style="font-size:10px; font-weight:700; color:var(--text-faint); margin-top:10px; letter-spacing:0.8px;">TPMS PRESSURES (BAR)</div>
+      <div class="tpms-grid">
+        <div class="tpms-box"><span style="font-size:10px; color:var(--text-dim);">FRONT LEFT</span><b id="tpms-fl">--</b></div>
+        <div class="tpms-box"><span style="font-size:10px; color:var(--text-dim);">FRONT RIGHT</span><b id="tpms-fr">--</b></div>
+        <div class="tpms-box"><span style="font-size:10px; color:var(--text-dim);">REAR LEFT</span><b id="tpms-rl">--</b></div>
+        <div class="tpms-box"><span style="font-size:10px; color:var(--text-dim);">REAR RIGHT</span><b id="tpms-rr">--</b></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CORE DASHBOARD & AES-256-GCM DECRYPTION ENGINE -->
+  <script>
+    // ── 🔒 ENCRYPTED CONFIGURATION (Safe to commit to GitHub) ─────────────────
+    // Generated via `node encrypt_config.js <passphrase>`
+    const ENCRYPTED_CONFIG = {
+      "salt": "sis69rW9NHZYjGROkCvCTQ==",
+      "iv": "SlkAxGlpIwwqZsJi",
+      "tag": "frqqvUCSbCWxDc0wPKdxeg==",
+      "ciphertext": "eeeVD29MkzjWB5mUAQr8tlt9PQpiTmb5+K2j8NfbU0XtjRMtdRpDXke0MSEEnSPuSdy3o/RELI/Fp+5W+eYg8458TtlTjZUmBWJoMyXJJf1WjhYyuAovexVMtFQdjSLFVd70hJcCqGYjEDdnOPbyuyvo10njiyYWQTab7JH3G52PYuG2trpg8dRbNX9RFZ8sFv7bPT8M5r/LQCUDEkWTAcTp0RKu4mm2orTMI9DWAzRDMIcpPJoz3tLU5ulful6pk2+M2pPi"
+    };
+
+    let config = JSON.parse(localStorage.getItem("env200_cfg") || "null");
+    let ws = null;
+    let source = "disconnected";
+    let cloudPollTimer = null;
+    let metrics = {};
+    let lastPowerTime = null;
+    let trip = { consumed: 0, recovered: 0, distKm: 0 };
+    let prevIgnition = false;
+    let gpsSpeed = null;
+    let displayPower = 0;
+    let displaySpeed = 0;
+    let cachedAt = 0;
+
+    // ── 🔑 AES-256-GCM WEB CRYPTO DECRYPTOR ──────────────────────────────────
+    async function decryptPayload(encData, pass) {
+      const b64toBuf = (b64) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const salt = b64toBuf(encData.salt);
+      const iv = b64toBuf(encData.iv);
+      const tag = b64toBuf(encData.tag);
+      const ct = b64toBuf(encData.ciphertext);
+
+      const combined = new Uint8Array(ct.length + tag.length);
+      combined.set(ct);
+      combined.set(tag, ct.length);
+
+      const enc = new TextEncoder();
+      const keyMaterial = await crypto.subtle.importKey(
+        "raw",
+        enc.encode(pass),
+        { name: "PBKDF2" },
+        false,
+        ["deriveKey"]
+      );
+
+      const key = await crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt: salt, iterations: 100000, hash: "SHA-256" },
+        keyMaterial,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["decrypt"]
+      );
+
+      const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv: iv }, key, combined);
+      return JSON.parse(new TextDecoder().decode(decrypted));
+    }
+
+    async function initConfig() {
+      // 1. Check if URL fragment hash contains key (e.g. #env200)
+      const hashKey = location.hash ? decodeURIComponent(location.hash.slice(1)) : null;
+      if (hashKey) {
+        try {
+          config = await decryptPayload(ENCRYPTED_CONFIG, hashKey);
+          localStorage.setItem("env200_cfg", JSON.stringify(config));
+          history.replaceState(null, '', location.pathname); // Clean URL
+          startDashboard();
+          return;
+        } catch (_) {}
+      }
+
+      // 2. Check localStorage
+      if (config && config.vehicleId) {
+        startDashboard();
+        return;
+      }
+
+      // 3. Prompt User for Master Key
+      document.getElementById("unlock-modal").style.display = "flex";
+      document.getElementById("passphrase-input").addEventListener("keyup", (e) => {
+        if (e.key === "Enter") submitPassphrase();
+      });
+    }
+
+    async function submitPassphrase() {
+      const pass = document.getElementById("passphrase-input").value.trim();
+      const errEl = document.getElementById("unlock-err");
+      errEl.style.display = "none";
+      try {
+        config = await decryptPayload(ENCRYPTED_CONFIG, pass);
+        localStorage.setItem("env200_cfg", JSON.stringify(config));
+        document.getElementById("unlock-modal").style.display = "none";
+        startDashboard();
+      } catch (err) {
+        errEl.style.display = "block";
+      }
+    }
+
+    // ── 🏎️ CORE DASHBOARD ───────────────────────────────────────────────────
+    function startDashboard() {
+      // Restore cached metrics
+      try {
+        const cached = JSON.parse(localStorage.getItem("env200_cached_metrics") || "{}");
+        if (cached && cached.data) {
+          metrics = cached.data;
+          cachedAt = cached.t || 0;
+          source = "cached";
+        }
+        const st = JSON.parse(localStorage.getItem("env200_trip") || "{}");
+        if (st && typeof st.consumed === "number") trip = st;
+      } catch (_) {}
+
+      // Screen Wake Lock
+      async function requestWakeLock() {
+        try {
+          if ('wakeLock' in navigator) await navigator.wakeLock.request('screen');
+        } catch (_) {}
+      }
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+          requestWakeLock();
+          reconnect();
+        }
+      });
+      requestWakeLock();
+
+      // GPS Tracking
+      if (navigator.geolocation) {
+        navigator.geolocation.watchPosition(
+          (p) => {
+            if (p.coords.speed != null && p.coords.speed >= 0) {
+              gpsSpeed = Math.round(p.coords.speed * 3.6);
+            }
+          },
+          () => {},
+          { enableHighAccuracy: true, maximumAge: 1000 }
+        );
+      }
+
+      // Start 60fps Loop
+      requestAnimationFrame(animLoop);
+
+      // Start networking
+      connectLocal();
+    }
+
+    // Debounced cache persistence
+    let saveCacheTimer = null;
+    function persistCache() {
+      clearTimeout(saveCacheTimer);
+      saveCacheTimer = setTimeout(() => {
+        try {
+          localStorage.setItem("env200_cached_metrics", JSON.stringify({ t: Date.now(), data: metrics }));
+        } catch (_) {}
+      }, 1000);
+    }
+
+    // WebSocket (Local Car Wi-Fi 10Hz)
+    function connectLocal() {
+      if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+      try {
+        ws = new WebSocket("ws://" + config.localIp + "/msg");
+        ws.onopen = () => {
+          source = "local";
+          updateBadge();
+          ws.send("subscribe #");
+          clearInterval(cloudPollTimer);
+        };
+        ws.onmessage = (e) => {
+          try {
+            const msg = JSON.parse(e.data);
+            if (msg?.metrics) handleMetrics(msg.metrics);
+          } catch (_) {}
+        };
+        ws.onclose = () => {
+          if (source === "local") {
+            source = "reconnecting";
+            updateBadge();
+            startCloudFallback();
+          }
+          setTimeout(connectLocal, 3000);
+        };
+        ws.onerror = () => { ws.close(); };
+      } catch (_) {
+        startCloudFallback();
+        setTimeout(connectLocal, 4000);
+      }
+    }
+
+    // Turboserv Cloud Polling Fallback
+    async function pollTurboserv() {
+      if (source === "local") return;
+      try {
+        const loginResp = await fetch(config.turboservUrl + "/login", { credentials: "include" });
+        const html = await loginResp.text();
+        const match = html.match(/name="csrf_token"\s+value="([^"]+)"/);
+        if (match) {
+          const body = new URLSearchParams({
+            csrf_token: match[1],
+            username: config.turboservUsername,
+            password: config.turboservPassword
+          });
+          await fetch(config.turboservUrl + "/login", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: body.toString()
+          });
+          const vehResp = await fetch(config.turboservUrl + "/vehicle/" + encodeURIComponent(config.vehicleId), { credentials: "include" });
+          const vehHtml = await vehResp.text();
+          const liveMatch = vehHtml.match(/const\s+initialLiveData\s*=\s*({[\s\S]*?});\s*\n/);
+          if (liveMatch) {
+            const init = JSON.parse(liveMatch[1]);
+            source = "turboserv";
+            updateBadge();
+            handleMetrics({
+              ...(init.v3_metrics || {}),
+              "v.b.soc": init.v3_metrics?.["v.b.soc"] || init.soc,
+              "v.b.soh": init.v3_metrics?.["v.b.soh"] || init.battery_soh,
+              "v.b.voltage": init.v3_metrics?.["v.b.voltage"] || init.battery_voltage,
+              "v.b.12v.voltage": init.v3_metrics?.["v.b.12v.voltage"] || init.vehicle_12v,
+              "v.c.charging": init.v3_metrics?.["v.c.charging"] || (init.charge_state_text === "charging" ? "yes" : "no"),
+            });
+          }
+        }
+      } catch (_) {}
+    }
+
+    function startCloudFallback() {
+      clearInterval(cloudPollTimer);
+      pollTurboserv();
+      cloudPollTimer = setInterval(pollTurboserv, 5000);
+    }
+
+    function reconnect() {
+      clearInterval(cloudPollTimer);
+      connectLocal();
+    }
+
+    function handleMetrics(delta) {
+      metrics = { ...metrics, ...delta };
+      const now = Date.now();
+
+      const ignition = metrics["v.e.on"] === "yes" || metrics["v.e.on"] === true;
+      if (ignition && !prevIgnition) {
+        trip = { consumed: 0, recovered: 0, distKm: 0 };
+        lastPowerTime = null;
+      }
+      prevIgnition = ignition;
+
+      if (ignition && "v.b.power" in metrics) {
+        const p = parseFloat(metrics["v.b.power"]) || 0;
+        if (lastPowerTime != null) {
+          const dtHours = Math.min(now - lastPowerTime, 10000) / 3600000;
+          const dE = p * dtHours;
+          if (dE > 0) trip.consumed += dE;
+          else if (dE < 0) trip.recovered += Math.abs(dE);
+        }
+        lastPowerTime = now;
+        try { localStorage.setItem("env200_trip", JSON.stringify(trip)); } catch (_) {}
+      }
+      persistCache();
+    }
+
+    function animLoop() {
+      const targetPower = parseFloat(metrics["v.b.power"] || 0);
+      const targetSpeed = gpsSpeed ?? Math.round(parseFloat(metrics["v.p.gpsspeed"] || metrics["v.p.speed"] || 0));
+
+      displayPower += (targetPower - displayPower) * 0.2;
+      displaySpeed += (targetSpeed - displaySpeed) * 0.2;
+
+      render();
+      requestAnimationFrame(animLoop);
+    }
+
+    function updateBadge() {
+      const badge = document.getElementById("conn-badge");
+      const isCharging = metrics["v.c.charging"] === "yes" || metrics["v.c.charging"] === true;
+      if (source === "local") {
+        badge.className = "badge local" + (isCharging ? " chg" : "");
+        badge.textContent = isCharging ? "⚡ LOCAL (CHG)" : "🟢 LOCAL WI-FI";
+      } else if (source === "turboserv") {
+        badge.className = "badge turboserv" + (isCharging ? " chg" : "");
+        badge.textContent = isCharging ? "⚡ CLOUD (CHG)" : "☁️ TURBOSERV";
+      } else if (source === "cached") {
+        const minsAgo = cachedAt > 0 ? Math.round((Date.now() - cachedAt) / 60000) : null;
+        badge.className = "badge offline";
+        badge.textContent = minsAgo != null && minsAgo < 120 ? "⚪ CACHED (" + minsAgo + "m ago)" : "⚪ CACHED";
+      } else {
+        badge.className = "badge offline";
+        badge.textContent = "CONNECTING...";
+      }
+    }
+
+    function render() {
+      updateBadge();
+      document.getElementById("disp-vehicle-id").textContent = config ? config.vehicleId : "e-NV200";
+
+      // Speed
+      document.getElementById("val-speed").textContent = Math.round(displaySpeed);
+
+      // Power
+      const pEl = document.getElementById("val-power");
+      pEl.textContent = Math.abs(displayPower).toFixed(1);
+
+      const fillRegen = document.getElementById("power-fill-regen");
+      const fillDrive = document.getElementById("power-fill-drive");
+      const modeEl = document.getElementById("power-mode");
+
+      if (displayPower < -0.1) {
+        pEl.style.color = "var(--regen)";
+        modeEl.textContent = "KW · REGEN ⚡";
+        modeEl.style.color = "var(--regen)";
+        const pct = Math.min(100, (Math.abs(displayPower) / 30) * 100);
+        fillRegen.style.width = pct * 0.35 + "%";
+        fillDrive.style.width = "0%";
+      } else if (displayPower > 0.1) {
+        pEl.style.color = displayPower > 45 ? "var(--warn)" : "var(--drive)";
+        modeEl.textContent = "KW · DRIVE 🔥";
+        modeEl.style.color = pEl.style.color;
+        const pct = Math.min(100, (displayPower / 80) * 100);
+        fillDrive.style.width = pct * 0.65 + "%";
+        fillRegen.style.width = "0%";
+      } else {
+        pEl.style.color = "var(--text)";
+        modeEl.textContent = "KW · IDLE";
+        modeEl.style.color = "var(--text-dim)";
+        fillRegen.style.width = "0%";
+        fillDrive.style.width = "0%";
+      }
+
+      // Battery & Range
+      const soc = parseFloat(metrics["v.b.soc"] || 0);
+      const gids = parseInt(metrics["xnl.v.b.gids"] || 0);
+      const whPerGid = config ? config.whPerGid : 80;
+      const consumptionRate = config ? (config.consumptionKwh100 / 100) : 0.140;
+      const kwh = ((gids * whPerGid) / 1000).toFixed(1);
+      const range = Math.round(kwh / consumptionRate);
+
+      document.getElementById("val-soc").textContent = Math.round(soc) + "%";
+      document.getElementById("val-kwh-gids").textContent = kwh + " kWh · " + gids + " gids";
+      document.getElementById("val-range").textContent = range + " km";
+
+      const socFill = document.getElementById("soc-bar-fill");
+      socFill.style.width = Math.min(100, Math.max(0, soc)) + "%";
+      socFill.style.background = soc < 20 ? "var(--warn)" : (soc < 35 ? "var(--drive)" : "var(--regen)");
+
+      document.getElementById("val-soh").textContent = (metrics["v.b.soh"] || "--") + "%";
+      document.getElementById("val-voltage").textContent = parseFloat(metrics["v.b.voltage"] || 0).toFixed(1) + "V";
+
+      // Trip
+      document.getElementById("trip-consumed").textContent = trip.consumed.toFixed(2);
+      document.getElementById("trip-recovered").textContent = trip.recovered.toFixed(2);
+      document.getElementById("trip-dist").textContent = trip.distKm.toFixed(1);
+      const netKwh = trip.consumed - trip.recovered;
+      const eff = trip.distKm > 0.5 ? ((netKwh / trip.distKm) * 100).toFixed(1) : "--";
+      document.getElementById("trip-efficiency").textContent = eff;
+
+      // Thermals & Chiller
+      const isCooling = metrics["xnl.v.b.cooling"] === "yes" || metrics["xnl.v.b.cooling"] === true;
+      const chillerEl = document.getElementById("chiller-badge");
+      if (isCooling) {
+        chillerEl.textContent = "❄️ CHILLER ACTIVE";
+        chillerEl.style.color = "var(--cool)";
+      } else {
+        chillerEl.textContent = "";
+      }
+
+      let cTemps = metrics["v.b.c.temp"];
+      if (typeof cTemps === "string") cTemps = cTemps.split(",").map(Number);
+      if (Array.isArray(cTemps) && cTemps.length > 0) {
+        const avg = (cTemps.reduce((a, b) => a + b, 0) / cTemps.length).toFixed(1);
+        const spread = (Math.max(...cTemps) - Math.min(...cTemps)).toFixed(1);
+        document.getElementById("val-bat-temp").textContent = avg + "°";
+        document.getElementById("val-temp-spread").textContent = spread + "°";
+      } else {
+        document.getElementById("val-bat-temp").textContent = (metrics["v.b.temp"] ?? "--") + "°";
+        document.getElementById("val-temp-spread").textContent = "--";
+      }
+
+      document.getElementById("val-12v").textContent = parseFloat(metrics["v.b.12v.voltage"] || 0).toFixed(1) + "V";
+
+      // TPMS
+      let tp = metrics["v.t.pressure"];
+      if (typeof tp === "string") tp = tp.split(",").map(Number);
+      if (Array.isArray(tp) && tp.length >= 4) {
+        document.getElementById("tpms-fl").textContent = (tp[0] / 100).toFixed(2);
+        document.getElementById("tpms-fr").textContent = (tp[1] / 100).toFixed(2);
+        document.getElementById("tpms-rl").textContent = (tp[2] / 100).toFixed(2);
+        document.getElementById("tpms-rr").textContent = (tp[3] / 100).toFixed(2);
+      }
+    }
+
+    // Launch configuration initialization
+    initConfig();
+  </script>
+</body>
+</html>
